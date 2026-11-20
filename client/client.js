@@ -39,6 +39,7 @@ window.__ModuleLoader__.load({
       configBackupNow: 'config.backupNow',
       configRestore: 'config.restore',
       capacityGet: 'capacity.get',
+      logsRead: 'logs.read',
     };
 
     const S = {
@@ -170,26 +171,34 @@ window.__ModuleLoader__.load({
         whiteSpace: 'pre-wrap',
         margin: 0,
       },
+      // 分区切换按钮：显式固定宽度，避免激活态字体变化导致按钮尺寸抖动
       tabs: { display: 'flex', gap: '6px', marginBottom: '14px' },
       tab: {
-        padding: '6px 14px',
+        width: '76px',
+        padding: '6px 0',
         borderRadius: '6px',
         fontSize: '13px',
         cursor: 'pointer',
         border: '1px solid transparent',
         background: 'transparent',
         color: 'var(--dsw-alias-label-secondary, #4e5969)',
+        textAlign: 'center',
+        fontWeight: 400,
       },
       tabActive: {
-        padding: '6px 14px',
+        width: '76px',
+        padding: '6px 0',
         borderRadius: '6px',
         fontSize: '13px',
         cursor: 'pointer',
         border: '1px solid var(--dsw-alias-border-l2, #e5e6eb)',
         background: 'var(--dsw-alias-bg-layer-1, #fff)',
         color: 'var(--dsw-alias-label-primary, #1f2329)',
-        fontWeight: 600,
+        textAlign: 'center',
+        fontWeight: 400,
       },
+      // 激活态文字单独加粗：外层宽度固定，不会推动按钮尺寸
+      tabActiveText: { fontWeight: 600 },
     };
 
     function fmtBytes(n) {
@@ -251,7 +260,21 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function ProjectsTab({ list, onUpload, onDownload, onBind, onCreate, onDelete, onKeepPrev, onCleanResidue, currentJob, remoteBusy }) {
+    function ProjectsTab({
+      list,
+      onUpload,
+      onDownload,
+      onBind,
+      onCreate,
+      onDelete,
+      onKeepPrev,
+      onCleanResidue,
+      currentJob,
+      remoteBusy,
+      job,
+      onDismissJob,
+      onResolveJob,
+    }) {
       const projects = list?.projects || [];
       const [newName, setNewName] = useState('');
       const [newDir, setNewDir] = useState('');
@@ -310,6 +333,47 @@ window.__ModuleLoader__.load({
             : null,
         ),
 
+        // ── 当前任务面板（上传/下载进度、口令/确认、结果报告）
+        // 上传下载已并入项目清单，任务面板放在清单上方常驻展示
+        job ? h('div', { style: { marginBottom: '14px' } }, h(JobPanel, { job, onDismiss: onDismissJob, onResolve: onResolveJob })) : null,
+        job && job.status === 'done' && job.result
+          ? h(
+              'div',
+              { style: S.card },
+              h('h2', { style: S.h2 }, job.kind === 'upload' ? '上传完成' : '下载完成'),
+              job.kind === 'download'
+                ? h('div', { style: { fontSize: '13px' } }, `目标目录：${job.result.targetDir}`)
+                : h(
+                    'div',
+                    { style: { fontSize: '13px' } },
+                    `${job.result.volumes} 卷 · ${fmtBytes(job.result.archiveBytes)} · 回读校验通过`,
+                  ),
+              job.kind === 'download'
+                ? h(
+                    'div',
+                    { style: { ...S.note, marginTop: '4px' } },
+                    `新建 ${job.result.created} / 覆盖 ${job.result.overwritten} / 未变 ${job.result.unchanged ?? 0} / 删除 ${job.result.deleted} 个文件 · ${fmtBytes(job.result.bytes)}`,
+                  )
+                : h(
+                    'div',
+                    { style: { ...S.note, marginTop: '4px' } },
+                    job.result.cleanMessage || '',
+                  ),
+              job.result.backupDir
+                ? h('div', { style: { ...S.note, marginTop: '4px' } }, `已备份待删文件到：${job.result.backupDir}`)
+                : null,
+              job.result.skippedVolumes?.length
+                ? h('div', { style: { ...S.note, marginTop: '4px' } }, `复用已下载分卷：${job.result.skippedVolumes.length} 卷`)
+                : null,
+              job.result.missingAfter?.length
+                ? h('div', { style: S.err, marginTop: '4px' }, `解包后仍缺少 ${job.result.missingAfter.length} 个文件：${job.result.missingAfter.slice(0, 10).join('、')}`)
+                : null,
+              job.result.extraAfter?.length
+                ? h('div', { style: S.err, marginTop: '4px' }, `解包后仍多余 ${job.result.extraAfter.length} 个文件：${job.result.extraAfter.slice(0, 10).join('、')}`)
+                : null,
+            )
+          : null,
+
         h(
           'div',
           { style: S.card },
@@ -324,6 +388,9 @@ window.__ModuleLoader__.load({
                 : p.state === 'local-only'
                   ? S.projectCardLocalOnly
                   : S.projectCard;
+            // 该项目的全部版本（最新在前），用于逐版下载/回滚
+            const versions = [p.latest, ...(p.history || [])].filter(Boolean);
+            const busyHere = Boolean(currentJob);
             return h(
               'div',
               { key: p.project, style },
@@ -345,16 +412,59 @@ window.__ModuleLoader__.load({
                 p.latest?.encrypted ? h('span', { style: S.chip }, '加密') : null,
               ),
               h('div', { style: { ...S.note, marginTop: '6px' } }, p.localDir ? `本地：${p.localDir}` : '本地：未绑定'),
-              p.history && p.history.length
+
+              // ── 版本列表：可直接对任意版本下载（历史版即回滚）
+              versions.length
                 ? h(
                     'div',
-                    { style: { ...S.note, marginTop: '6px' } },
-                    p.history.map((v) =>
-                      h('div', { key: v.versionId }, `├ ${v.version} ${fmtTime(v.uploadedAt)} ${v.sizeText} / ${v.volumes} 卷`),
+                    { style: { marginTop: '8px' } },
+                    versions.map((v, i) =>
+                      h(
+                        'div',
+                        {
+                          key: v.versionId,
+                          style: {
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            flexWrap: 'wrap',
+                            padding: '5px 0',
+                            borderTop: i === 0 ? 'none' : '1px solid var(--dsw-alias-border-l2, #e5e6eb)',
+                          },
+                        },
+                        i === 0 ? h('span', { style: S.chipOk }, '最新') : h('span', { style: S.chip }, '历史'),
+                        h('span', { style: { fontSize: '13px' } }, `${fmtTime(v.uploadedAt)} · ${v.sizeText} · ${v.volumes} 卷`),
+                        v.status === 'complete'
+                          ? null
+                          : h('span', { style: S.chipErr }, v.status === 'missing' ? `缺第 ${(v.missing || []).join('、')} 卷` : '字节数不符'),
+                        h('span', { style: { flex: 1 } }),
+                        h(
+                          'button',
+                          {
+                            style: S.btn,
+                            disabled: !p.bound || busyHere || Boolean(remoteBusy) || v.status !== 'complete',
+                            title: !p.bound
+                              ? '请先绑定本地目录'
+                              : remoteBusy
+                                ? '远端正被另一台电脑占用'
+                                : v.status !== 'complete'
+                                  ? '该版本不完整，无法下载'
+                                  : i === 0
+                                    ? '下载并镜像覆盖本地目录'
+                                    : '回滚到该历史版本',
+                            onClick: () => onDownload(p.project, v.versionId),
+                          },
+                          i === 0 ? '下载并镜像' : '回滚到此版',
+                        ),
+                      ),
                     ),
-                    h('div', null, '└ 下次上传后将按「保留上一版」设置清理'),
                   )
                 : null,
+
+              p.keepPrev
+                ? h('div', { style: { ...S.note, marginTop: '6px' } }, '└ 已开启「保留上一版」：下次上传后保留最近 2 个版本')
+                : null,
+
               h(
                 'div',
                 { style: { display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' } },
@@ -364,22 +474,10 @@ window.__ModuleLoader__.load({
                       {
                         style: S.btnPrimary,
                         onClick: () => onUpload(p.project),
-                        disabled: Boolean(currentJob) || Boolean(remoteBusy),
+                        disabled: busyHere || Boolean(remoteBusy),
                         title: remoteBusy ? '远端正被另一台电脑占用，请等它结束或稍后重试' : '',
                       },
-                      '上传',
-                    )
-                  : null,
-                p.latest && p.bound
-                  ? h(
-                      'button',
-                      {
-                        style: S.btn,
-                        onClick: () => onDownload(p.project, p.latest.versionId),
-                        disabled: Boolean(currentJob) || Boolean(remoteBusy),
-                        title: remoteBusy ? '远端正被另一台电脑占用，请等它结束或稍后重试' : '',
-                      },
-                      '下载并镜像',
+                      '上传新版本',
                     )
                   : null,
                 p.state === 'unbound'
@@ -393,18 +491,6 @@ window.__ModuleLoader__.load({
                       { style: S.btn, onClick: () => { setBindTarget(p.project); setBindDir(p.localDir || ''); } },
                       '改目录',
                     ),
-                p.latest
-                  ? h(
-                      'button',
-                      {
-                        style: S.btn,
-                        onClick: () => onDownload(p.project),
-                        disabled: Boolean(currentJob) || Boolean(remoteBusy),
-                        title: remoteBusy ? '远端正被另一台电脑占用，请等它结束或稍后重试' : '',
-                      },
-                      '下载最新',
-                    )
-                  : null,
                 h(
                   'button',
                   {
@@ -490,197 +576,6 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** 分区通用的「选一个已绑定项目」选择器。 */
-    function ProjectPicker({ projects, value, onChange, placeholder }) {
-      if (!projects.length) {
-        return h('div', { style: S.note }, placeholder || '还没有已绑定的项目，请先去「项目」分区绑定本地目录。');
-      }
-      return h(
-        'div',
-        { style: S.row },
-        h('span', { style: S.label }, '项目'),
-        h(
-          'select',
-          { style: S.input, value: value || '', onChange: (e) => onChange(e.target.value) },
-          projects.map((p) => h('option', { key: p.project, value: p.project }, p.project)),
-        ),
-      );
-    }
-
-    /** ② 上传分区：选项目 → 打包上传 → 进度 + 卷列表 + 回读校验结果。 */
-    function UploadTab({ list, onUpload, job, onDismissJob, onResolveJob, remoteBusy }) {
-      const projects = (list?.projects || []).filter((p) => p.bound);
-      const [name, setName] = useState(projects[0]?.project || '');
-      const target = projects.find((p) => p.project === name) || projects[0] || null;
-      const active = job && job.kind === 'upload' ? job : null;
-      const running = Boolean(active && active.status === 'running');
-
-      return h(
-        'div',
-        null,
-        h(
-          'div',
-          { style: S.card },
-          h('h2', { style: S.h2 }, '上传（整目录快照）'),
-          h(ProjectPicker, {
-            projects,
-            value: target?.project,
-            onChange: setName,
-            placeholder: '还没有已绑定的项目，请先去「项目」分区绑定本地目录。',
-          }),
-          target
-            ? h(
-                'div',
-                { style: { ...S.note, marginTop: '6px' } },
-                `本地：${target.localDir}`,
-              )
-            : null,
-          target
-            ? h(
-                'div',
-                { style: { ...S.note, marginTop: '4px' } },
-                target.latest
-                  ? `远端最新：${target.latest.version} · ${target.latest.sizeText} · ${target.latest.volumes} 卷（${fmtTime(target.latest.uploadedAt)}）`
-                  : '远端还没有这个项目的任何版本',
-              )
-            : null,
-          h(
-            'div',
-            { style: { display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' } },
-            h(
-              'button',
-              {
-                style: S.btnPrimary,
-                disabled: !target || running || Boolean(remoteBusy),
-                title: remoteBusy ? '远端正被另一台电脑占用，请等它结束或稍后重试' : '',
-                onClick: () => target && onUpload(target.project),
-              },
-              running ? '上传中…' : '开始上传',
-            ),
-            target && target.keepPrev
-              ? h('span', { style: { ...S.note, alignSelf: 'center' } }, '已开启「保留上一版」：本次上传后会保留最近 2 个版本')
-              : h('span', { style: { ...S.note, alignSelf: 'center' } }, '默认只保留最新 1 个版本（可在「项目」分区开启保留上一版）'),
-          ),
-          h(
-            'div',
-            { style: { ...S.note, marginTop: '8px' } },
-            '上传会先打包成 7z 分卷，逐卷计算 SHA-256 后写入邮箱，再回读逐卷校验；校验通过前不会删除任何旧版本。',
-          ),
-        ),
-        active
-          ? h('div', { style: { marginTop: '10px' } }, h(JobPanel, { job: active, onDismiss: onDismissJob, onResolve: onResolveJob }))
-          : null,
-      );
-    }
-
-    /** ③ 下载分区：选项目 → 完整性检查 → 下载/校验/解包 → 覆盖确认 → 结果报告。 */
-    function DownloadTab({ list, onDownload, job, onDismissJob, onResolveJob, remoteBusy }) {
-      const projects = list?.projects || [];
-      const [name, setName] = useState(projects[0]?.project || '');
-      const target = projects.find((p) => p.project === name) || projects[0] || null;
-      const active = job && job.kind === 'download' ? job : null;
-      const running = Boolean(active && active.status === 'running');
-      const versions = target ? [target.latest, ...(target.history || [])].filter(Boolean) : [];
-
-      return h(
-        'div',
-        null,
-        h(
-          'div',
-          { style: S.card },
-          h('h2', { style: S.h2 }, '下载（镜像覆盖）'),
-          h(ProjectPicker, { projects, value: target?.project, onChange: setName }),
-          target && !target.bound
-            ? h(
-                'div',
-                { style: S.err, marginTop: '6px' },
-                '这个项目还没有绑定本地目录，下载前请先在「项目」分区绑定。',
-              )
-            : null,
-          target
-            ? h(
-                'div',
-                { style: { ...S.row, marginTop: '8px' } },
-                h('span', { style: S.label }, '目标目录'),
-                h('span', { style: { fontSize: '13px' } }, target.localDir || '未绑定'),
-              )
-            : null,
-          versions.length === 0
-            ? h('div', { style: { ...S.note, marginTop: '8px' } }, '远端还没有任何版本可以下载。')
-            : h(
-                'div',
-                { style: { marginTop: '10px' } },
-                versions.map((v, i) =>
-                  h(
-                    'div',
-                    {
-                      key: v.versionId,
-                      style: {
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '10px',
-                        flexWrap: 'wrap',
-                        padding: '6px 0',
-                        borderTop: i === 0 ? 'none' : '1px solid var(--dsw-alias-border-l2, #e5e6eb)',
-                      },
-                    },
-                    i === 0 ? h('span', { style: S.chipOk }, '最新') : h('span', { style: S.chip }, '历史'),
-                    h('span', { style: { fontSize: '13px' } }, `${v.version} · ${v.sizeText} · ${v.volumes} 卷`),
-                    v.status === 'complete'
-                      ? h('span', { style: S.chipOk }, '完整')
-                      : h('span', { style: S.chipErr }, v.status === 'missing' ? `缺第 ${(v.missing || []).join('、')} 卷` : '字节数不符'),
-                    v.encrypted ? h('span', { style: S.chip }, '加密') : null,
-                    h('span', { style: { flex: 1 } }),
-                    h(
-                      'button',
-                      {
-                        style: S.btn,
-                        disabled: !target?.bound || running || Boolean(remoteBusy),
-                        title: remoteBusy ? '远端正被另一台电脑占用，请等它结束或稍后重试' : '',
-                        onClick: () => target && onDownload(target.project, v.versionId),
-                      },
-                      '下载并镜像',
-                    ),
-                  ),
-                ),
-              ),
-          h(
-            'div',
-            { style: { ...S.note, marginTop: '8px' } },
-            '下载会先校验远端完整性，再逐卷下载并比对 SHA-256，合并后校验整包哈希；改动本地文件前一定会先弹确认框，可勾选「先备份再覆盖」。',
-          ),
-        ),
-        active
-          ? h('div', { style: { marginTop: '10px' } }, h(JobPanel, { job: active, onDismiss: onDismissJob, onResolve: onResolveJob }))
-          : null,
-        active && active.status === 'done' && active.result
-          ? h(
-              'div',
-              { style: S.card },
-              h('h2', { style: S.h2 }, '结果报告'),
-              h('div', { style: { fontSize: '13px' } }, `目标目录：${active.result.targetDir}`),
-              h(
-                'div',
-                { style: { ...S.note, marginTop: '4px' } },
-                `新建 ${active.result.created} / 覆盖 ${active.result.overwritten} / 未变 ${active.result.unchanged ?? 0} / 删除 ${active.result.deleted} 个文件 · ${fmtBytes(active.result.bytes)}`,
-              ),
-              active.result.skippedVolumes?.length
-                ? h('div', { style: { ...S.note, marginTop: '4px' } }, `复用已下载分卷：${active.result.skippedVolumes.length} 卷`)
-                : null,
-              active.result.backupDir
-                ? h('div', { style: { ...S.note, marginTop: '4px' } }, `已备份待删文件到：${active.result.backupDir}`)
-                : null,
-              active.result.missingAfter?.length
-                ? h('div', { style: S.err, marginTop: '4px' }, `解包后仍缺少 ${active.result.missingAfter.length} 个文件：${active.result.missingAfter.slice(0, 10).join('、')}`)
-                : null,
-              active.result.extraAfter?.length
-                ? h('div', { style: S.err, marginTop: '4px' }, `解包后仍多余 ${active.result.extraAfter.length} 个文件：${active.result.extraAfter.slice(0, 10).join('、')}`)
-                : null,
-            )
-          : null,
-      );
-    }
-
     function JobPanel({ job, onDismiss, onResolve }) {
       const [pass, setPass] = useState('');
       if (!job) return null;
@@ -742,6 +637,151 @@ window.__ModuleLoader__.load({
           : null,
         job.log && job.log.length
           ? h('pre', { style: { ...S.pre, marginTop: '10px' } }, job.log.map((l) => l.message).join('\n'))
+          : null,
+      );
+    }
+
+    /**
+     * 日志分区：查看本机运行日志。
+     *
+     * 后端 logs.read 已做脱敏（授权码、完整邮箱地址不会出现在日志里，见 lib/log.js），
+     * 所以这里直接展示即可。默认看最近 1 天，可切 3/7 天。
+     */
+    function LogsTab({ onLoad, status }) {
+      const [days, setDays] = useState(1);
+      const [logs, setLogs] = useState(null);
+      const [loading, setLoading] = useState(false);
+      const [err, setErr] = useState(null);
+      const [autoRefresh, setAutoRefresh] = useState(false);
+
+      const load = useCallback(
+        async (d) => {
+          setLoading(true);
+          setErr(null);
+          const r = await onLoad(d);
+          setLoading(false);
+          if (r.ok) setLogs(r.value?.logs || []);
+          else setErr(r.text);
+        },
+        [onLoad],
+      );
+
+      // 首次进入即加载
+      useEffect(() => {
+        load(days);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, []);
+
+      // 自动刷新（每 5 秒）
+      useEffect(() => {
+        if (!autoRefresh) return undefined;
+        const t = setInterval(() => load(days), 5000);
+        return () => clearInterval(t);
+      }, [autoRefresh, days, load]);
+
+      const totalLines = (logs || []).reduce((s, d) => s + (d.lines?.length || 0), 0);
+
+      return h(
+        'div',
+        null,
+        h(
+          'div',
+          { style: S.card },
+          h('h2', { style: S.h2 }, '运行日志'),
+          h(
+            'div',
+            { style: { ...S.row } },
+            h('span', { style: S.label }, '时间范围'),
+            ...[1, 3, 7].map((d) =>
+              h(
+                'button',
+                {
+                  key: d,
+                  type: 'button',
+                  style: days === d ? S.btnPrimary : S.btn,
+                  onClick: () => {
+                    setDays(d);
+                    load(d);
+                  },
+                },
+                `最近 ${d} 天`,
+              ),
+            ),
+            h('span', { style: { flex: 1 } }),
+            h(
+              'button',
+              { type: 'button', style: S.btn, onClick: () => load(days), disabled: loading },
+              loading ? '刷新中…' : '刷新',
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                style: autoRefresh ? S.btnPrimary : S.btn,
+                onClick: () => setAutoRefresh((v) => !v),
+              },
+              autoRefresh ? '⏸ 停止自动刷新' : '▶ 自动刷新（5s）',
+            ),
+          ),
+          h(
+            'div',
+            { style: { ...S.note, marginTop: '6px' } },
+            status?.dataDir
+              ? `日志目录：${status.dataDir}\\logs · 保留 14 天，单文件上限 50 MB`
+              : '保留 14 天，单文件上限 50 MB',
+          ),
+          h(
+            'div',
+            { style: { ...S.note, marginTop: '2px' } },
+            'ⓘ 日志已脱敏：不会记录授权码、完整邮箱地址与加密口令。',
+          ),
+          err ? h('div', { style: { ...S.err, marginTop: '8px' } }, err) : null,
+        ),
+
+        logs
+          ? logs.length === 0
+            ? h('div', { style: S.card }, h('div', { style: S.note }, '还没有日志'))
+            : logs.map((d) =>
+                h(
+                  'div',
+                  { key: d.date, style: S.card },
+                  h(
+                    'div',
+                    { style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' } },
+                    h('h2', { style: { ...S.h2, margin: 0 } }, d.date),
+                    h('span', { style: S.chip }, `${d.lines?.length || 0} 行`),
+                    h('span', { style: { flex: 1 } }),
+                    d.lines?.length
+                      ? h(
+                          'button',
+                          {
+                            type: 'button',
+                            style: S.btn,
+                            onClick: () => {
+                              // 复制当天日志到剪贴板，便于贴给别人排查
+                              try {
+                                navigator.clipboard.writeText(d.lines.join('\n'));
+                              } catch {
+                                /* 剪贴板不可用时忽略 */
+                              }
+                            },
+                          },
+                          '复制',
+                        )
+                      : null,
+                  ),
+                  d.lines?.length
+                    ? h(
+                        'pre',
+                        { style: { ...S.pre, maxHeight: '420px' } },
+                        d.lines.join('\n'),
+                      )
+                    : h('div', { style: S.note }, '这一天没有日志'),
+                ),
+              )
+          : null,
+        totalLines > 0
+          ? h('div', { style: { ...S.note, marginTop: '4px' } }, `共 ${totalLines} 行`)
           : null,
       );
     }
@@ -928,6 +968,7 @@ window.__ModuleLoader__.load({
     }
 
     function SyncShuttlePage({ rpc }) {
+      // 只剩「项目」「设置」两个分区：上传/下载已并入项目卡片
       const [tab, setTab] = useState('projects');
       const [status, setStatus] = useState(null);
       const [lock, setLock] = useState(null);
@@ -1087,6 +1128,15 @@ window.__ModuleLoader__.load({
         [call, refresh],
       );
 
+      /** 日志分区用：拉取最近 N 天日志。返回 { ok, value:{logs} } 或 { ok:false, text }。 */
+      const onLoadLogs = useCallback(
+        async (days) => {
+          const r = await call(EP.logsRead, { days });
+          return r.ok ? { ok: true, value: r.value } : { ok: false, text: r.text };
+        },
+        [call],
+      );
+
       const onSaveCreds = useCallback(
         async (account, token) => {
           if (!account || !token) return { ok: false, text: '邮箱地址与授权码都要填' };
@@ -1149,13 +1199,26 @@ window.__ModuleLoader__.load({
           h('span', { style: S.note }, '两台电脑不同时开机也能同步文件'),
         ),
         h(StatusBar, { status, lock, onRefresh: refresh, busy }),
+        // 三个分区：项目（含上传/下载）、日志、设置
         h(
           'div',
           { style: S.tabs },
-          h('button', { style: tab === 'projects' ? S.tabActive : S.tab, onClick: () => setTab('projects') }, '项目'),
-          h('button', { style: tab === 'upload' ? S.tabActive : S.tab, onClick: () => setTab('upload') }, '上传'),
-          h('button', { style: tab === 'download' ? S.tabActive : S.tab, onClick: () => setTab('download') }, '下载'),
-          h('button', { style: tab === 'settings' ? S.tabActive : S.tab, onClick: () => setTab('settings') }, '设置'),
+          ...([
+            ['projects', '项目'],
+            ['logs', '日志'],
+            ['settings', '设置'],
+          ].map(([key, label]) =>
+            h(
+              'button',
+              {
+                key,
+                type: 'button',
+                style: tab === key ? S.tabActive : S.tab,
+                onClick: () => setTab(key),
+              },
+              h('span', { style: tab === key ? S.tabActiveText : null }, label),
+            ),
+          )),
         ),
         tab === 'projects'
           ? h(ProjectsTab, {
@@ -1169,33 +1232,13 @@ window.__ModuleLoader__.load({
               onCleanResidue,
               currentJob: job && job.status === 'running' ? job : null,
               remoteBusy,
-            })
-          : null,
-        tab === 'upload'
-          ? h(UploadTab, {
-              list,
-              onUpload,
               job,
               onDismissJob: () => setJob(null),
               onResolveJob,
-              remoteBusy,
             })
           : null,
-        tab === 'download'
-          ? h(DownloadTab, {
-              list,
-              onDownload,
-              job,
-              onDismissJob: () => setJob(null),
-              onResolveJob,
-              remoteBusy,
-            })
-          : null,
+        tab === 'logs' ? h(LogsTab, { onLoad: onLoadLogs, status }) : null,
         tab === 'settings' ? h(SettingsTab, { settings, onSave: onSaveCreds, onTest, status }) : null,
-        // 任务面板在「上传/下载」分区内就地展示，避免同一任务出现两份
-        tab === 'upload' || tab === 'download'
-          ? null
-          : h(JobPanel, { job, onDismiss: () => setJob(null), onResolve: onResolveJob }),
       );
     }
 
