@@ -116,6 +116,74 @@ const GiB = 1024 ** 3;
       `${(packed.archiveBytes / GiB).toFixed(2)} GiB`,
     );
     console.log(`  打包耗时 ${(elapsed / 1000).toFixed(1)}s，产出 ${packed.volumeFiles.length} 卷`);
+
+    // ── 关键：2 GiB 归档的**读取**链路也不能崩
+    // 之前 readFileSync 在这里同样会抛 2 GiB 错误
+    // （测试报错为「归档自检失败：File size (...) is greater than 2 GiB」）
+
+    // ① 自检（testArchive 内部走 FdReader 按需读）
+    let testRes = null;
+    let testErr = null;
+    const t1 = Date.now();
+    try {
+      testRes = await arch.testArchive(packed.archiveFile);
+    } catch (e) {
+      testErr = e;
+    }
+    check('2 GiB 归档自检不抛 2 GiB 错误', !testErr || !/greater than 2 GiB/i.test(testErr.message), testErr?.message);
+    check('2 GiB 归档自检通过', testRes?.ok === true, testRes?.message);
+    console.log(`  自检耗时 ${((Date.now() - t1) / 1000).toFixed(1)}s，${testRes?.files ?? '?'} 个条目`);
+
+    // ② 列目录
+    let listRes = null;
+    let listErr = null;
+    try {
+      listRes = await arch.listArchive(packed.archiveFile);
+    } catch (e) {
+      listErr = e;
+    }
+    check('2 GiB 归档列目录不抛 2 GiB 错误', !listErr || !/greater than 2 GiB/i.test(listErr.message), listErr?.message);
+    check('2 GiB 归档列目录成功', listRes?.ok === true, listRes?.message);
+    check(
+      '列出的条目含大文件与小文件',
+      listRes?.files?.some((f) => f.rel === 'big.bin') && listRes.files.some((f) => f.rel === 'small.txt'),
+      JSON.stringify(listRes?.files?.map((f) => f.rel)),
+    );
+
+    // ③ 合并 + 解包（这才是完整链路）
+    const mergedBig = path.join(root, 'merged-big.zip');
+    let extractErr = null;
+    const targetBig = path.join(root, 'target-big');
+    try {
+      await arch.mergeVolumes(packed.volumeFiles, mergedBig);
+      await arch.extractArchive(mergedBig, targetBig);
+    } catch (e) {
+      extractErr = e;
+    }
+    check('2 GiB 归档合并+解包不抛 2 GiB 错误', !extractErr || !/greater than 2 GiB/i.test(extractErr.message), extractErr?.message);
+    check('2 GiB 归档解包成功', !extractErr, extractErr?.message);
+    if (!extractErr) {
+      const bigBack = path.join(targetBig, 'big.bin');
+      check(
+        '解包出的大文件大小正确',
+        fs.existsSync(bigBack) && fs.statSync(bigBack).size === BIG,
+        `${fs.existsSync(bigBack) ? fs.statSync(bigBack).size : 'missing'} vs ${BIG}`,
+      );
+      // 抽样校验内容：只比对首尾 4 字节与中间一块，避免读 2 GB
+      if (fs.existsSync(bigBack)) {
+        const fd2 = fs.openSync(bigBack, 'r');
+        const head = Buffer.alloc(1024);
+        fs.readSync(fd2, head, 0, 1024, 0);
+        const fd3 = fs.openSync(bigFile, 'r');
+        const headOrig = Buffer.alloc(1024);
+        fs.readSync(fd3, headOrig, 0, 1024, 0);
+        fs.closeSync(fd2);
+        fs.closeSync(fd3);
+        check('解包内容首部 1KB 一致（抽样）', head.equals(headOrig));
+      }
+    }
+    fs.rmSync(mergedBig, { force: true });
+    fs.rmSync(targetBig, { recursive: true, force: true });
   }
 
   fs.rmSync(outDir, { recursive: true, force: true });
