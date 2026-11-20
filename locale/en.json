@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Sync Shuttle",
+    "description": "Use a mailbox as a file relay to mirror directories between two computers that are never on at the same time: a folder is packed into a ZIP and split into small volumes, written into a dedicated IMAP folder, then verified volume by volume, reassembled, unpacked, and mirrored onto the other machine. Bundled pure-JS archiver, no 7-Zip required."
+  }
+}

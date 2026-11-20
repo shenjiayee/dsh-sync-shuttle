@@ -1,0 +1,46 @@
+# 依赖
+node_modules/
+
+# ── 凭据与运行时产物（绝不能进仓库）──────────────────────────
+# 插件运行时把状态放在 $DSH_HOME/sync-shuttle/，正常不会落在仓库里；
+# 但本地跑测试时可能在工作区产生同名文件，这里一律挡掉。
+credentials.json
+machine.json
+projects.json
+projects.json.bak-*
+*.cred
+cred.txt
+test-cred.txt
+sync-shuttle-cred.txt
+
+# 日志
+logs/
+*.log
+
+# 本地测试用的临时目录（可能被放置凭据，永不提交）
+tmp/
+tmp-*/
+.ss-backup-*/
+
+# 归档与下载的中间文件
+*.7z
+*.7z.0*
+*.zip
+*.zip.0*
+*.ok
+
+# 环境变量文件（可能含密钥）
+.env
+.env.*
+!.env.example
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时调试脚本（以 _ 开头的一次性验证脚本，不提交）
+test/_*.mjs
+_*.mjs

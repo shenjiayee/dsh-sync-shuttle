@@ -1,0 +1,61 @@
+# 穿梭 · 同步中转 — 插件配置（插在 profile 的 cordis.patch.yml 或本 bundle 内）
+#
+# 注意：授权码不写在这里。patch 是明文、会进 git 与快照，
+# 授权码保存在本机 $DSH_HOME/sync-shuttle/credentials.json（权限 600），
+# 由界面「设置」页写入。
+
+- insert:
+    - id: sync-shuttle
+      name: dsh-sync-shuttle
+      config:
+        # 邮箱服务商预设：qq / 163 / 126 / yeah / custom
+        preset: qq
+        # 自定义服务器（仅 preset=custom 时生效）
+        imapHost: ''
+        imapPort: 993
+        imapSecure: true
+        smtpHost: ''
+        smtpPort: 465
+        smtpSecure: true
+
+        # 数据目录：留空 = $DSH_HOME/sync-shuttle
+        dataDir: ''
+
+        # 归档格式：内置纯 JS ZIP，不需要安装 7-Zip。
+        # 分卷由插件自己按 adapter 的 volumeBytes 切片（<versionId>.001/.002/…），
+        # 拼回去就是标准 .zip，任何解压工具都能打开。
+        #
+        # ⚠️ 分卷大小已归存储 adapter 所有，不再是配置项：
+        #    qqmail adapter 固定 40 MiB（依据：QQ 单封上限 ≈51 MiB，留 11 MiB 余量）
+        #    这样从设计上消灭「贴着上限用导致某次 TOOBIG」这类误配置
+        #    旧配置里的 volumeBytes 会被忽略。
+
+        # 存储后端：目前只支持 qqmail
+        storageKind: qqmail
+
+        # 远端文件夹前缀：生产保持为空（用 Sync-Shuttle*）。
+        # 测试脚本会自动设成 'Testing-'，把数据隔离到 Testing-Sync-Shuttle* 独立文件夹，
+        # 这样测试崩溃留下的残留绝不会混进生产数据。生产环境不要设它。
+        folderPrefix: ''
+
+        # 新项目的默认「保留上一版」开关
+        keepPrevDefault: false
+
+        # 连续上传多卷之间的间隔，避免触发服务商限流
+        volumeGapMs: 600
+
+        # 邮箱容量基线（字节）。QQ 不提供 QUOTA 接口，只能手填。
+        # 免费 QQ 邮箱上限 16 GB，但这里默认 12 GB —— 刻意留出 ~4 GB 给
+        # 收件箱、已发送与服务器对齐损耗，避免把邮箱占满导致连正常收信都被拒。
+        # 达到此阈值时上传会被拒绝。
+        capacityBytes: 12884901888
+
+        # 远端锁：租期 5 分钟、心跳 60 秒
+        lockTtlMs: 300000
+        lockHeartbeatMs: 60000
+
+        # 日志级别：debug / info / warn / error
+        logLevel: info
+
+        # 只读模式：只允许浏览与下载，禁止一切远端写操作
+        readOnly: false
