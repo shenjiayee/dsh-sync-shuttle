@@ -648,9 +648,24 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** 各阶段的图标与中文名，用于日志列表。 */
+    const STAGE_META = {
+      precheck: { icon: '🔍', label: '检查' },
+      packing: { icon: '📦', label: '打包' },
+      hashing: { icon: '#️⃣', label: '校验和' },
+      uploading: { icon: '⬆️', label: '上传' },
+      verifying: { icon: '✅', label: '回读校验' },
+      cleaning: { icon: '🧹', label: '清理' },
+      locking: { icon: '🔒', label: '获取锁' },
+      starting: { icon: '⏳', label: '准备' },
+      done: { icon: '🎉', label: '完成' },
+      failed: { icon: '❌', label: '失败' },
+    };
+
     function JobPanel({ job, onDismiss, onResolve }) {
       const [pass, setPass] = useState('');
       if (!job) return null;
+      const isRunning = job.status === 'running';
       const color =
         job.status === 'failed'
           ? S.err
@@ -658,21 +673,56 @@ window.__ModuleLoader__.load({
             ? S.ok
             : { fontSize: '13px', color: 'var(--dsw-alias-label-secondary, #4e5969)' };
       const needCode = job.status === 'need-input' ? job.error?.code : null;
+
+      // 阶段名与图标
+      const meta = STAGE_META[job.stage] || { icon: '•', label: job.stage || '' };
+      // 日志倒序展示（最新的在上），更符合"看进度"的直觉
+      const logs = (job.log || []).slice().reverse();
+
       return h(
         'div',
         { style: S.card },
         h(
           'div',
-          { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-          h('strong', null, job.kind === 'upload' ? '上传中' : '下载中'),
+          { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' } },
+          h('strong', null, job.kind === 'upload' ? '上传' : '下载'),
           h('span', { style: S.note }, job.project),
+          job.status === 'done'
+            ? h('span', { style: S.chipOk }, '完成')
+            : job.status === 'failed'
+              ? h('span', { style: S.chipErr }, '失败')
+              : job.status === 'need-input'
+                ? h('span', { style: S.chip }, '待操作')
+                : h('span', { style: S.chip }, `${meta.icon} ${meta.label}`),
           h('span', { style: { flex: 1 } }),
           h('span', { style: S.note }, job.elapsedText),
           h('button', { style: S.btn, onClick: onDismiss }, '收起'),
         ),
-        h('div', { style: color, marginTop: '8px' }, job.message),
+
+        // 当前状态一行（进度在跑时这行会不断刷新）
+        h('div', { style: { ...color, marginTop: '8px' } }, job.message),
+
+        // 进度条：运行中显示；完成也显示满格，失败显示红色
+        typeof job.percent === 'number' && (isRunning || job.status === 'done')
+          ? h(
+              'div',
+              { style: S.bar },
+              h('div', {
+                style: {
+                  ...(job.status === 'failed' ? S.barFull : S.barInner),
+                  width: `${Math.max(0, Math.min(100, job.percent))}%`,
+                },
+              }),
+            )
+          : null,
+
+        // 关键的量化信息：百分比 + 阶段
         typeof job.percent === 'number' && job.status === 'running'
-          ? h('div', { style: S.bar }, h('div', { style: { ...S.barInner, width: `${job.percent}%` } }))
+          ? h(
+              'div',
+              { style: { ...S.note, marginTop: '4px' } },
+              `${job.percent}% · ${meta.label}`,
+            )
           : null,
         // 加密支持已移除（方案 A3），不再有口令输入分支。
         needCode === 'NEED_CONFIRM'
@@ -707,8 +757,39 @@ window.__ModuleLoader__.load({
               ),
             )
           : null,
-        job.log && job.log.length
-          ? h('pre', { style: { ...S.pre, marginTop: '10px' } }, job.log.map((l) => l.message).join('\n'))
+        // ── 分阶段日志：最新的在最上面，带阶段图标与时间
+        logs.length
+          ? h(
+              'div',
+              { style: { ...S.pre, marginTop: '10px', maxHeight: '260px', padding: '8px 10px' } },
+              logs.map((l, i) => {
+                const lm = STAGE_META[l.stage] || { icon: '•', label: '' };
+                const time = l.at ? String(l.at).slice(11, 19) : '';
+                // 进度行淡化，里程碑行加重：一眼能扫出"到哪一步了"
+                const isProgress = l.progress || /（\d+%）$/.test(l.message || '');
+                return h(
+                  'div',
+                  {
+                    key: `${l.at}-${i}`,
+                    style: {
+                      display: 'flex',
+                      gap: '8px',
+                      alignItems: 'baseline',
+                      padding: '1px 0',
+                      opacity: isProgress ? 0.55 : 1,
+                      // 最新一条（倒序后的第 0 条）稍作强调
+                      fontWeight: i === 0 && !isProgress ? 600 : 400,
+                    },
+                  },
+                  h('span', { style: { color: 'var(--dsw-alias-label-tertiary, #86909c)', flex: '0 0 auto' } }, time),
+                  h('span', { style: { flex: '0 0 auto', width: '16px', textAlign: 'center' } }, lm.icon),
+                  h('span', { style: { flex: 1, wordBreak: 'break-word' } }, l.message),
+                  l.repeat && l.repeat > 1
+                    ? h('span', { style: { ...S.chip, flex: '0 0 auto', marginLeft: '4px' } }, `×${l.repeat}`)
+                    : null,
+                );
+              }),
+            )
           : null,
       );
     }
