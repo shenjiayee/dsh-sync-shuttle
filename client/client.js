@@ -49,6 +49,12 @@ window.__ModuleLoader__.load({
         margin: '0 auto',
         color: 'var(--dsw-alias-label-primary, #1f2329)',
         fontFamily: 'inherit',
+        // 三个分区共用同一个页面容器宽度：无论哪个 TAB 的内容多长，
+        // 都不允许把容器撑宽。配合 S.card 的 maxWidth:100% 一起生效。
+        boxSizing: 'border-box',
+        width: '100%',
+        minWidth: 0,
+        overflowX: 'hidden',
       },
       header: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' },
       h1: { fontSize: '20px', fontWeight: 600, margin: 0 },
@@ -59,6 +65,12 @@ window.__ModuleLoader__.load({
         borderRadius: '10px',
         padding: '16px',
         marginBottom: '14px',
+        // 卡片宽度一律由外层容器决定，绝不被内部长内容撑宽。
+        // 否则日志页的 <pre> 长行会把整页撑得比其它页宽 —— 之前正是这个问题。
+        boxSizing: 'border-box',
+        maxWidth: '100%',
+        minWidth: 0,
+        overflowWrap: 'anywhere',
       },
       row: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px', flexWrap: 'wrap' },
       label: { minWidth: '96px', color: 'var(--dsw-alias-label-secondary, #4e5969)', fontSize: '13px' },
@@ -168,37 +180,97 @@ window.__ModuleLoader__.load({
         fontSize: '12px',
         maxHeight: '220px',
         overflow: 'auto',
+        // pre-wrap 只按空白折行；日志里的长哈希串/URL 没有空格，
+        // 会把容器硬撑宽 —— 这正是「日志页比别的页宽」的原因。
+        // 改用 pre-wrap + overflowWrap:anywhere：既保留换行，又能强制断词。
         whiteSpace: 'pre-wrap',
+        overflowWrap: 'anywhere',
+        wordBreak: 'break-word',
+        // 不让内容决定宽度：宽度交给父容器，超长内容在框内滚动/折行
+        maxWidth: '100%',
+        boxSizing: 'border-box',
         margin: 0,
       },
-      // 分区切换按钮：显式固定宽度，避免激活态字体变化导致按钮尺寸抖动
-      tabs: { display: 'flex', gap: '6px', marginBottom: '14px' },
+      // 分区切换按钮：宽度由**父容器**的 Grid 列定义决定，而不是靠按钮自己的 width。
+      //
+      // 为什么不用 flex + width：宿主主题或全局 button 样式可能带 flex:1 /
+      // min-width:auto / 或更高的选择器优先级，把按钮上的 width 顶掉，
+      // 于是每个按钮按各自内容分配宽度 —— 激活态文字加粗后就肉眼可见地变宽。
+      //
+      // Grid 的 gridTemplateColumns 定义在父容器上，列宽由容器决定，
+      // 子元素无论自身样式怎么写都无法改变列宽（只能溢出被裁剪）。
+      // 三条固定 76px 列 + gap，从布局层面保证等宽。
+      // ── 分区切换按钮：三个 TAB 平分整行宽度 ────────────────────────
+      //
+      // 实现：容器 display:flex，每个 TAB 外层包裹层 flex:1 1 0 + minWidth:0。
+      //   · flex-grow:1   → 三个平均分配剩余空间
+      //   · flex-basis:0  → 不受内容宽度影响（关键：否则文字长的会更宽）
+      //   · minWidth:0    → 允许收缩到低于内容宽度，配合 basis:0 才真正等分
+      // 按钮再 width:100% 填满包裹层。
+      // 于是三个 TAB 恒等宽，且随窗口宽度自适应。
+      tabs: {
+        display: 'flex',
+        flexWrap: 'nowrap',
+        gap: '6px',
+        marginBottom: '14px',
+        alignItems: 'stretch',
+        width: '100%',
+      },
+      // 包裹层：三等分之一。basis:0 是等分的关键，不能用 auto
+      tabWrap: {
+        flex: '1 1 0',
+        minWidth: 0,
+        display: 'flex',
+      },
+      // 按钮：填满包裹层，自身不参与宽度计算
       tab: {
-        width: '76px',
+        flex: '1 1 auto',
+        boxSizing: 'border-box',
+        width: '100%',
+        minWidth: 0,
+        maxWidth: '100%',
         padding: '6px 0',
+        margin: 0,
         borderRadius: '6px',
         fontSize: '13px',
+        lineHeight: '20px',
         cursor: 'pointer',
-        border: '1px solid transparent',
-        background: 'transparent',
+        // 未激活也给可见边界，保证三个"方块"一样大、都看得见
+        border: '1px solid var(--dsw-alias-border-l2, #e5e6eb)',
+        background: 'var(--dsw-alias-bg-layer-2, #f7f8fa)',
         color: 'var(--dsw-alias-label-secondary, #4e5969)',
         textAlign: 'center',
-        fontWeight: 400,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        fontWeight: 500,
       },
       tabActive: {
-        width: '76px',
+        flex: '1 1 auto',
+        boxSizing: 'border-box',
+        width: '100%',
+        minWidth: 0,
+        maxWidth: '100%',
         padding: '6px 0',
+        margin: 0,
         borderRadius: '6px',
         fontSize: '13px',
+        lineHeight: '20px',
         cursor: 'pointer',
-        border: '1px solid var(--dsw-alias-border-l2, #e5e6eb)',
+        // 与 tab 完全相同的盒模型，只在颜色上区分选中
+        border: '1px solid var(--dsw-alias-brand-primary, #165dff)',
         background: 'var(--dsw-alias-bg-layer-1, #fff)',
-        color: 'var(--dsw-alias-label-primary, #1f2329)',
+        color: 'var(--dsw-alias-brand-primary, #165dff)',
         textAlign: 'center',
-        fontWeight: 400,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        fontWeight: 500,
       },
-      // 激活态文字单独加粗：外层宽度固定，不会推动按钮尺寸
-      tabActiveText: { fontWeight: 600 },
+      // 两个字重故意相同：靠边框颜色 + 背景 + 文字色区分选中，
+      // 不用加粗，避免粗体造成的"视觉更宽"
+      tabText: { fontWeight: 500 },
+      tabActiveText: { fontWeight: 500 },
     };
 
     function fmtBytes(n) {
@@ -1200,6 +1272,10 @@ window.__ModuleLoader__.load({
         ),
         h(StatusBar, { status, lock, onRefresh: refresh, busy }),
         // 三个分区：项目（含上传/下载）、日志、设置
+        //
+        // 每个 TAB 外面套一层固定 76px 的包裹元素（S.tabWrap）。
+        // 宽度由**包裹层**决定，按钮只负责填满它 —— 这样宿主给 button
+        // 加的任何样式都无法改变横向尺寸，三个 TAB 在几何上必然等宽。
         h(
           'div',
           { style: S.tabs },
@@ -1209,14 +1285,18 @@ window.__ModuleLoader__.load({
             ['settings', '设置'],
           ].map(([key, label]) =>
             h(
-              'button',
-              {
-                key,
-                type: 'button',
-                style: tab === key ? S.tabActive : S.tab,
-                onClick: () => setTab(key),
-              },
-              h('span', { style: tab === key ? S.tabActiveText : null }, label),
+              'div',
+              { key, style: S.tabWrap },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  style: tab === key ? S.tabActive : S.tab,
+                  onClick: () => setTab(key),
+                },
+                // 字重统一 500：激活态只靠边框色+背景+文字色区分
+                h('span', { style: tab === key ? S.tabActiveText : S.tabText }, label),
+              ),
             ),
           )),
         ),
