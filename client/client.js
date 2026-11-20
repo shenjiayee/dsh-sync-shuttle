@@ -649,18 +649,30 @@ window.__ModuleLoader__.load({
     }
 
     /** 各阶段的图标与中文名，用于日志列表。 */
+    // 各阶段的进度条颜色：三个阶段视觉上必须能区分
+    //   打包 = 蓝、校验和 = 紫、写入 = 绿、回读校验 = 橙
     const STAGE_META = {
-      precheck: { icon: '🔍', label: '检查' },
-      packing: { icon: '📦', label: '打包' },
-      hashing: { icon: '#️⃣', label: '校验和' },
-      uploading: { icon: '⬆️', label: '上传' },
-      verifying: { icon: '✅', label: '回读校验' },
-      cleaning: { icon: '🧹', label: '清理' },
-      locking: { icon: '🔒', label: '获取锁' },
-      starting: { icon: '⏳', label: '准备' },
-      done: { icon: '🎉', label: '完成' },
-      failed: { icon: '❌', label: '失败' },
+      precheck: { icon: '🔍', label: '检查', color: 'var(--dsw-alias-label-tertiary, #86909c)' },
+      packing: { icon: '📦', label: '打包', color: 'var(--dsw-alias-brand-primary, #165dff)' },
+      hashing: { icon: '#️⃣', label: '校验和', color: '#8b5cf6' },
+      uploading: { icon: '⬆️', label: '写入', color: 'var(--dsw-alias-state-success-primary, #00b42a)' },
+      downloading: { icon: '⬇️', label: '下载', color: 'var(--dsw-alias-brand-primary, #165dff)' },
+      merging: { icon: '🔗', label: '合并', color: '#8b5cf6' },
+      planning: { icon: '📋', label: '计算差异', color: 'var(--dsw-alias-label-tertiary, #86909c)' },
+      extracting: { icon: '📂', label: '解包', color: 'var(--dsw-alias-state-success-primary, #00b42a)' },
+      mirroring: { icon: '🪞', label: '镜像删除', color: 'var(--dsw-alias-state-warning-primary, #ff7d00)' },
+      verifying: { icon: '✅', label: '回读校验', color: 'var(--dsw-alias-state-warning-primary, #ff7d00)' },
+      cleaning: { icon: '🧹', label: '清理', color: 'var(--dsw-alias-label-tertiary, #86909c)' },
+      locking: { icon: '🔒', label: '获取锁', color: 'var(--dsw-alias-label-tertiary, #86909c)' },
+      starting: { icon: '⏳', label: '准备', color: 'var(--dsw-alias-label-tertiary, #86909c)' },
+      done: { icon: '🎉', label: '完成', color: 'var(--dsw-alias-state-success-primary, #00b42a)' },
+      failed: { icon: '❌', label: '失败', color: 'var(--dsw-alias-state-error-primary, #f53f3f)' },
     };
+
+    /** 一次上传会依次经过的阶段，用于按顺序画多条进度条。 */
+    const UPLOAD_STAGE_ORDER = ['packing', 'hashing', 'uploading', 'verifying'];
+    /** 下载只经历这两个阶段。 */
+    const DOWNLOAD_STAGE_ORDER = ['downloading', 'verifying'];
 
     function JobPanel({ job, onDismiss, onResolve }) {
       const [pass, setPass] = useState('');
@@ -702,28 +714,72 @@ window.__ModuleLoader__.load({
         // 当前状态一行（进度在跑时这行会不断刷新）
         h('div', { style: { ...color, marginTop: '8px' } }, job.message),
 
-        // 进度条：运行中显示；完成也显示满格，失败显示红色
-        typeof job.percent === 'number' && (isRunning || job.status === 'done')
-          ? h(
-              'div',
-              { style: S.bar },
-              h('div', {
-                style: {
-                  ...(job.status === 'failed' ? S.barFull : S.barInner),
-                  width: `${Math.max(0, Math.min(100, job.percent))}%`,
-                },
-              }),
-            )
-          : null,
-
-        // 关键的量化信息：百分比 + 阶段
-        typeof job.percent === 'number' && job.status === 'running'
-          ? h(
-              'div',
-              { style: { ...S.note, marginTop: '4px' } },
-              `${job.percent}% · ${meta.label}`,
-            )
-          : null,
+        // ── 分阶段进度条 ────────────────────────────────────────────
+        // 一次上传会依次经历 打包 → 校验和 → 写入 → 回读校验，
+        // 每段的目标不同（字节数 vs 卷数），所以各画一条、各用一种颜色。
+        // 已达成的阶段保留满格灰条，当前阶段用高亮色，未开始的阶段不显示。
+        (() => {
+          const order = job.kind === 'upload' ? UPLOAD_STAGE_ORDER : DOWNLOAD_STAGE_ORDER;
+          const stages = job.stages || {};
+          const rows = [];
+          for (const key of order) {
+            const info = stages[key];
+            if (!info) continue;
+            const sm = STAGE_META[key] || { icon: '•', label: key, color: '#86909c' };
+            const pct = Math.max(0, Math.min(100, Number(info.percent) || 0));
+            // 是否当前正在进行的阶段
+            const isCurrent = job.stage === key;
+            const isDoneSoFar = pct >= 100;
+            const barBg = job.status === 'failed' && isCurrent
+              ? 'var(--dsw-alias-state-error-primary, #f53f3f)'
+              : isDoneSoFar
+                ? 'var(--dsw-alias-state-success-primary, #00b42a)'
+                : sm.color;
+            // 副标题：卷进度或字节进度，有哪个显示哪个
+            const bits = [];
+            if (typeof info.index === 'number' && typeof info.total === 'number' && info.total > 0) {
+              bits.push(`${info.index}/${info.total} 卷`);
+            }
+            if (typeof info.doneBytes === 'number' && typeof info.totalBytes === 'number' && info.totalBytes > 0) {
+              bits.push(`${fmtBytes(info.doneBytes)} / ${fmtBytes(info.totalBytes)}`);
+            }
+            bits.push(`${pct}%`);
+            rows.push(
+              h(
+                'div',
+                { key, style: { marginTop: '8px' } },
+                h(
+                  'div',
+                  { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' } },
+                  h('span', { style: { fontSize: '12px', opacity: isCurrent ? 1 : 0.6 } }, `${sm.icon} ${sm.label}`),
+                  h('span', { style: { flex: 1 } }),
+                  h(
+                    'span',
+                    { style: { ...S.note, opacity: isCurrent ? 1 : 0.6 } },
+                    bits.join(' · '),
+                  ),
+                  isDoneSoFar ? h('span', { style: { ...S.chipOk, fontSize: '11px' } }, '✓') : null,
+                ),
+                h(
+                  'div',
+                  { style: { ...S.bar, height: '5px' } },
+                  h('div', {
+                    style: {
+                      height: '100%',
+                      width: `${pct}%`,
+                      background: barBg,
+                      borderRadius: '3px',
+                      transition: 'width .2s',
+                      // 非当前阶段整体淡化，避免抢注意力
+                      opacity: isCurrent ? 1 : 0.55,
+                    },
+                  }),
+                ),
+              ),
+            );
+          }
+          return rows.length ? h('div', { style: { marginTop: '4px' } }, rows) : null;
+        })(),
         // 加密支持已移除（方案 A3），不再有口令输入分支。
         needCode === 'NEED_CONFIRM'
           ? h(
